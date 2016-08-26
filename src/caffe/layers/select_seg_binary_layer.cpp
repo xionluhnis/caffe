@@ -1,16 +1,13 @@
+#include <opencv2/core/core.hpp>
+
 #include <fstream>  // NOLINT(readability/streams)
 #include <iostream>  // NOLINT(readability/streams)
 #include <string>
 #include <utility>
 #include <vector>
-#include <algorithm>
 
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-#include <opencv2/highgui/highgui_c.h>
-#include <opencv2/imgproc/imgproc.hpp>
-
-#include "caffe/layer.hpp"
+#include "caffe/data_transformer.hpp"
+#include "caffe/layers/base_data_layer.hpp"
 #include "caffe/layers/select_seg_binary_layer.hpp"
 #include "caffe/util/benchmark.hpp"
 #include "caffe/util/io.hpp"
@@ -21,7 +18,7 @@ namespace caffe {
 
 template <typename Dtype>
 SelectSegBinaryLayer<Dtype>::~SelectSegBinaryLayer<Dtype>() {
-  this->JoinPrefetchThread();
+  this->StopInternalThread();
 }
 
 template <typename Dtype>
@@ -102,32 +99,31 @@ void SelectSegBinaryLayer<Dtype>::DataLayerSetUp(const vector<Blob<Dtype>*>& bot
   const int height = cv_img.rows;
   const int width = cv_img.cols;
   // image
-  const int crop_size = this->layer_param_.transform_param().crop_size();
+  // Use data_transformer to infer the expected blob shape from a cv_image.
+  vector<int> top_shape = this->data_transformer_->InferBlobShape(cv_img);
+  this->transformed_data_.Reshape(top_shape);
+  // Reshape prefetch_data and top[0] according to the batch_size.
   const int batch_size = this->layer_param_.image_data_param().batch_size();
-  if (crop_size > 0) {
-    top[0]->Reshape(batch_size, channels, crop_size, crop_size);
-    this->prefetch_data_.Reshape(batch_size, channels, crop_size, crop_size);
-    this->transformed_data_.Reshape(1, channels, crop_size, crop_size);
+  CHECK_GT(batch_size, 0) << "Positive batch size required";
+  top_shape[0] = batch_size;
+  for (int i = 0; i < this->PREFETCH_COUNT; ++i) {
+    this->prefetch_[i].data_.Reshape(top_shape);
+  }
+  top[0]->Reshape(top_shape);
+  top[1]->Reshape(top_shape);
 
-    //label
-    top[1]->Reshape(batch_size, 1, crop_size, crop_size);
-    this->prefetch_label_.Reshape(batch_size, 1, crop_size, crop_size);
-    this->transformed_label_.Reshape(1, 1, crop_size, crop_size);
-     
-  } else {
-    top[0]->Reshape(batch_size, channels, height, width);
-    this->prefetch_data_.Reshape(batch_size, channels, height, width);
-    this->transformed_data_.Reshape(1, channels, height, width);
-
-    //label
-    top[1]->Reshape(batch_size, 1, height, width);
-    this->prefetch_label_.Reshape(batch_size, 1, height, width);
-    this->transformed_label_.Reshape(1, 1, height, width);     
+  LOG(INFO) << "output data size: " << top[0]->num() << ","
+      << top[0]->channels() << "," << top[0]->height() << ","
+      << top[0]->width();
+  // label
+  vector<int> label_shape(1, batch_size);
+  top[2]->Reshape(label_shape);
+  for (int i = 0; i < this->PREFETCH_COUNT; ++i) {
+    this->prefetch_[i].label_.Reshape(label_shape);
   }
 
   // image dimensions, for each image, stores (img_height, img_width)
   top[2]->Reshape(batch_size, label_dim_, 1, 1);
-  this->prefetch_data_dim_.Reshape(batch_size, label_dim_, 1, 1);
   this->class_label_.Reshape(1, label_dim_, 1, 1);
 
   LOG(INFO) << "output data size: " << top[0]->num() << ","
@@ -152,7 +148,7 @@ void SelectSegBinaryLayer<Dtype>::ShuffleImages() {
 
 // This function is used to create a thread that prefetches the data.
 template <typename Dtype>
-void SelectSegBinaryLayer<Dtype>::InternalThreadEntry() {
+void SelectSegBinaryLayer<Dtype>::load_batch(Batch<Dtype>* batch) {
   CPUTimer batch_timer;
   batch_timer.Start();
   double read_time = 0;

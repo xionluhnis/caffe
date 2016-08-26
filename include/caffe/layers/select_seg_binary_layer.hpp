@@ -10,16 +10,20 @@
 #include "caffe/internal_thread.hpp"
 #include "caffe/layer.hpp"
 #include "caffe/layers/base_data_layer.hpp"
-#include "caffe/layers/image_dim_prefetching_data_layer.hpp"
 #include "caffe/proto/caffe.pb.h"
 
 namespace caffe {
-
+    
+/**
+ * @brief Provides binary segmentation data to the Net from image files.
+ *
+ * TODO(dox): thorough documentation for Forward and proto params.
+ */
 template <typename Dtype>
-class SelectSegBinaryLayer : public ImageDimPrefetchingDataLayer<Dtype> {
+class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
  public:
   explicit SelectSegBinaryLayer(const LayerParameter& param)
-    : ImageDimPrefetchingDataLayer<Dtype>(param) {}
+    : BasePrefetchingDataLayer<Dtype>(param) {}
   virtual ~SelectSegBinaryLayer();
   virtual void DataLayerSetUp(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top);
@@ -27,10 +31,10 @@ class SelectSegBinaryLayer : public ImageDimPrefetchingDataLayer<Dtype> {
   virtual inline const char* type() const { return "SelectSegBinary"; }
   virtual inline int ExactNumBottomBlobs() const { return 0; }
   virtual inline int ExactNumTopBlobs() const { return 3; }
-  virtual inline bool AutoTopBlobs() const { return true; }
 
  protected:
   virtual void ShuffleImages();
+  virtual void load_batch(Batch<Dtype>* batch);
   virtual void InternalThreadEntry();
 
  protected:
