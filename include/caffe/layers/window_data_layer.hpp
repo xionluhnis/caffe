@@ -30,7 +30,6 @@ class WindowDataLayer : public BasePrefetchingDataLayer<Dtype> {
       const vector<Blob<Dtype>*>& top);
 
   virtual inline const char* type() const { return "WindowData"; }
-  virtual inline int ExactNumBottomBlobs() const { return 0; }
   virtual inline int ExactNumTopBlobs() const { return 2; }
 
  protected:

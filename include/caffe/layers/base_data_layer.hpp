@@ -42,13 +42,16 @@ class BaseDataLayer : public Layer<Dtype> {
  protected:
   TransformationParameter transform_param_;
   shared_ptr<DataTransformer<Dtype> > data_transformer_;
-  bool output_labels_;
+  size_t num_top_;
 };
 
+/**
+ * We choose a random value for the maximum 
+ */
 template <typename Dtype>
 class Batch {
  public:
-  Blob<Dtype> data_, label_;
+   Blob<Dtype> data_[9];
 };
 
 template <typename Dtype>
@@ -67,6 +70,9 @@ class BasePrefetchingDataLayer :
   virtual void Forward_gpu(const vector<Blob<Dtype>*>& bottom,
       const vector<Blob<Dtype>*>& top);
 
+  virtual inline int ExactNumBottomBlobs() const { return 0; }
+  virtual inline bool AutoTopBlobs() const { return true; }
+  
   // Prefetches batches (asynchronously if to GPU memory)
   static const int PREFETCH_COUNT = 3;
 

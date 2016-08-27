@@ -1,6 +1,7 @@
 #ifndef SELECT_SEG_BINARY_LAYER_HPP
 #define SELECT_SEG_BINARY_LAYER_HPP
 
+#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -19,7 +20,7 @@ namespace caffe {
  *
  * TODO(dox): thorough documentation for Forward and proto params.
  */
-template <typename Dtype>
+template <typename Dtype, int NumImages>
 class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
  public:
   explicit SelectSegBinaryLayer(const LayerParameter& param)
@@ -29,8 +30,7 @@ class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
       const vector<Blob<Dtype>*>& top);
 
   virtual inline const char* type() const { return "SelectSegBinary"; }
-  virtual inline int ExactNumBottomBlobs() const { return 0; }
-  virtual inline int ExactNumTopBlobs() const { return 3; }
+  virtual inline int ExactNumTopBlobs() const { return NumImages + 1; }
 
  protected:
   virtual void ShuffleImages();
@@ -38,21 +38,21 @@ class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
   virtual void InternalThreadEntry();
 
  protected:
-  Blob<Dtype> transformed_label_;
+  Blob<Dtype> transformed_data_[NumImages];
   Blob<Dtype> class_label_;
 
   shared_ptr<Caffe::RNG> prefetch_rng_;
 
-  typedef struct SegItems {
-    std::string imgfn;
-    std::string segfn;
+  struct SegItems {
+    std::array<std::string, NumImages> imgfn;
     int x1, y1, x2, y2;
     vector<int> cls_label;
-  } SEGITEMS;
+  };
 
-  vector<SEGITEMS> lines_;
+  vector<SegItems> lines_;
   int lines_id_;
   int label_dim_;
+  std::array<vector<int>, NumImages> img_dims_;
 };
 
 }  // namespace caffe
