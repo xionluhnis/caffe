@@ -18,7 +18,7 @@
 namespace caffe {
 
 template <typename Dtype, int NumImages>
-SelectSegBinaryLayer<Dtype, NumImages>::~SelectSegBinaryLayer<Dtype>() {
+SelectSegBinaryLayer<Dtype, NumImages>::~SelectSegBinaryLayer<Dtype, NumImages>() {
   this->StopInternalThread();
 }
 
@@ -28,7 +28,7 @@ void SelectSegBinaryLayer<Dtype, NumImages>::DataLayerSetUp(const vector<Blob<Dt
   const int new_height = this->layer_param_.image_data_param().new_height();
   const int new_width  = this->layer_param_.image_data_param().new_width();
   const bool is_color  = this->layer_param_.image_data_param().is_color();
-  const int label_type = this->layer_param_.image_data_param().label_type();
+  // const int label_type = this->layer_param_.image_data_param().label_type();
   string root_folder = this->layer_param_.image_data_param().root_folder();
 
   TransformationParameter transform_param = this->layer_param_.transform_param();
@@ -96,16 +96,12 @@ void SelectSegBinaryLayer<Dtype, NumImages>::DataLayerSetUp(const vector<Blob<Dt
   for(unsigned int i = 0; i < NumImages; ++i){
     cv::Mat cv_img = ReadImageToCVMat(root_folder + lines_[lines_id_].imgfn[i],
                                       new_height, new_width, is_color && i != NumImages - 1);
-    const int channels = cv_img.channels();
-    const int height = cv_img.rows;
-    const int width = cv_img.cols;
     // image
     // Use data_transformer to infer the expected blob shape from a cv_image.
     vector<int> top_shape = this->data_transformer_->InferBlobShape(cv_img);
-    this->transformed_data_[i].Reshape(top_shape);
+    xformed_data_[i].Reshape(top_shape);
     // Reshape prefetch_data and top[0] according to the batch_size.
     top_shape[0] = batch_size;
-    img_dims_[i] = top_shape; // store for later use
     for (int j = 0; j < this->PREFETCH_COUNT; ++j) {
       this->prefetch_[j].data_[i].Reshape(top_shape);
     }
@@ -119,6 +115,7 @@ void SelectSegBinaryLayer<Dtype, NumImages>::DataLayerSetUp(const vector<Blob<Dt
 
   // class label
   top[NumImages]->Reshape(batch_size, label_dim_, 1, 1);
+  this->prefetch_data_dim_.Reshape(batch_size, label_dim_, 1, 1);
   this->class_label_.Reshape(1, label_dim_, 1, 1);
   
   LOG(INFO) << "output class label size: " << top[NumImages]->num() << ","
@@ -143,8 +140,10 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
   CPUTimer timer;
   for(unsigned int i = 0; i < NumImages; ++i){
     CHECK(batch->data_[i].count());
-    CHECK(this->transformed_data_[i].count());
+    CHECK(xformed_data_[i].count());
   }
+  
+  Dtype* top_cls_label = this->prefetch_data_dim_.mutable_cpu_data();
 
   ImageDataParameter image_data_param = this->layer_param_.image_data_param();
   const int batch_size = image_data_param.batch_size();
@@ -153,7 +152,7 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
   const bool is_color = image_data_param.is_color();
   string root_folder = image_data_param.root_folder();
   
-  const int label_type = this->layer_param_.image_data_param().label_type();
+  // const int label_type = this->layer_param_.image_data_param().label_type();
   const int ignore_label = image_data_param.ignore_label();
 
   // datum scales
@@ -166,9 +165,6 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
     std::vector<cv::Mat> cv_img_list;
     cv_img_list.reserve(NumImages);
     for (int i = 0; i < NumImages; ++i) {
-      // Reshape transformed data
-      this->transformed_data_[i].Reshape(img_dims_[i]);
-
       // load image
       cv::Mat cv_img;
       if(i < NumImages - 1) {
@@ -178,8 +174,6 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
         cv_img = ReadImageToCVMatNearest(root_folder + lines_[lines_id_].imgfn[i],
 					    0, 0, false);
       }
-      int img_row = cv_img.rows();
-      int img_col = cv_img.cols();
 
       CHECK(cv_img.data) << "Could not load img_" << i << ": " << lines_[lines_id_].imgfn[i];
       read_time += timer.MicroSeconds();
@@ -221,20 +215,26 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
       }
       
       cv_img_list.push_back(cv_cropped_img);
+      
+      // Note: already done in DataLayerSetUp
+      // Use data_transformer to infer the expected blob shape from a cv_image.
+      // vector<int> top_shape = this->data_transformer_->InferBlobShape(cv_img);
+      // xformed_data_[i].Reshape(top_shape);
     
       // target after transformation
       Dtype* prefetch_data = batch->data_[i].mutable_cpu_data();
-      int offset = this->prefetch_data_.offset(item_id);
-      this->transformed_data_[i].set_cpu_data(prefetch_data + offset);
+      int offset = batch->data_[i].offset(item_id);
+      // Reshape transformed data
+      xformed_data_[i].set_cpu_data(prefetch_data + offset);
     }
 
     timer.Start();
     // Apply transformations (mirror, crop...) to the images
-    this->data_transformer_.TransformImgs(cv_img_segs, transformed_data_, ignore_label);
+    this->data_transformer_->TransformImgs(cv_img_list, &xformed_data_[0], ignore_label);
     trans_time += timer.MicroSeconds();
 
     // class label
-    offset = this->prefetch_data_dim_.offset(item_id);
+    int offset = this->prefetch_data_dim_.offset(item_id);
     this->class_label_.set_cpu_data(top_cls_label + offset);
     Dtype * cls_label_data = this->class_label_.mutable_cpu_data();
     for (int i = 0; i < label_dim_; i++) {
@@ -242,8 +242,8 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
     }
 
     // modify seg label
-    Dtype * seg_label_data = this->transformed_data_[NumImages - 1].mutable_cpu_data();
-    int pixel_count = this->transformed_label_[NumImages - 1].count();
+    Dtype * seg_label_data = xformed_data_[NumImages - 1].mutable_cpu_data();
+    int pixel_count = xformed_data_[NumImages - 1].count();
     const int cls_label_base = this->layer_param_.select_seg_binary_param().cls_label_base();
     for (int i = 0; i < pixel_count; i++) {
       int seg_label = seg_label_data[i];

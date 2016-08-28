@@ -213,7 +213,7 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
   Blob<Dtype>* transformed_data_blobs, const int ignore_label) {
   CHECK(cv_img_seg.size() >= 2) << "Input must contain image and seg.";
 
-  const unsigned int numImages = cv_img.seg.size();
+  const unsigned int numImages = cv_img_seg.size();
   const unsigned int labelIdx  = numImages - 1;
 
   const int img_channels = cv_img_seg[0].channels();
@@ -229,9 +229,9 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
   const int data_height   = transformed_data_blobs[0].height();
   const int data_width    = transformed_data_blobs[0].width();
 
-  const int label_channels = transformed_data_blob[labelIdx].channels();
-  const int label_height   = transformed_data_blob[labelIdx].height();
-  const int label_width    = transformed_data_blob[labelIdx].width();
+  const int label_channels = transformed_data_blobs[labelIdx].channels();
+  const int label_height   = transformed_data_blobs[labelIdx].height();
+  const int label_width    = transformed_data_blobs[labelIdx].width();
 
   CHECK_EQ(seg_channels, 1);
   CHECK_EQ(img_channels, data_channels);
@@ -242,7 +242,7 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
   CHECK_EQ(data_height, label_height);
   CHECK_EQ(data_width, label_width);
   
-  for(unsigned int i = 0; i < numImages; ++I)
+  for(unsigned int i = 0; i < numImages; ++i)
     CHECK(cv_img_seg[i].depth() == CV_8U) << "Image data type (" << i << ") must be unsigned byte";
 
   const int crop_size = param_.crop_size();
@@ -250,50 +250,64 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
   const bool do_mirror = param_.mirror() && Rand(2);
   const bool has_mean_file = param_.has_mean_file();
   const bool has_mean_values = mean_values_.size() > 0;
+  unsigned int total_channels = 0;
+  for(unsigned int i = 0; i < numImages - 1; ++i)
+    total_channels += cv_img_seg[i].channels();
 
   CHECK_GT(img_channels, 0);
   Dtype* mean = NULL;
   if (has_mean_file) {
-    CHECK_EQ(img_channels, data_mean_.channels());
+    CHECK_EQ(total_channels, data_mean_.channels());
     CHECK_EQ(img_height, data_mean_.height());
     CHECK_EQ(img_width, data_mean_.width());
     mean = data_mean_.mutable_cpu_data();
   }
   if (has_mean_values) {
-    CHECK(mean_values_.size() == 1 || mean_values_.size() == img_channels) <<
-     "Specify either 1 mean_value or as many as channels: " << img_channels;
+    CHECK(mean_values_.size() == 1 || mean_values_.size() == total_channels) <<
+     "Specify either 1 mean_value or as many as total cumulated channels: " << total_channels;
     if (img_channels > 1 && mean_values_.size() == 1) {
       // Replicate the mean_value for simplicity
-      for (int c = 1; c < img_channels; ++c) {
+      for (int c = 1; c < total_channels; ++c) {
         mean_values_.push_back(mean_values_[0]);
       }
     }
   }
-
-  // TODO finish the implementation below
+  
+  // Note:
+  // we treat the segmentation label as a special case
+  // since it contains values that should not be mixed by smoothing
+  //   i.e. the numbers are not pixels there, but labels
+  //   => separate images (numImages - 1) from segmentation (1)
 
   int h_off = 0;
   int w_off = 0;
-  cv::Mat cv_cropped_img = cv_img_seg[0];
-  cv::Mat cv_cropped_seg = cv_img_seg[1];
+  std::vector<cv::Mat> cv_cropped_imgs(numImages - 1);
+  cv::Mat cv_cropped_seg = cv_img_seg.back();
 
   // transform to double, since we will pad mean pixel values
-  cv_cropped_img.convertTo(cv_cropped_img, CV_64F);
+  for(unsigned int i = 0; i < numImages - 1; ++i) {
+    cv_img_seg[i].convertTo(cv_cropped_imgs[i], CV_64F);
+  }
 
   // Check if we need to pad img to fit for crop_size
   // copymakeborder
   int pad_height = std::max(crop_size - img_height, 0);
   int pad_width  = std::max(crop_size - img_width, 0);
   if (pad_height > 0 || pad_width > 0) {
-    cv::copyMakeBorder(cv_cropped_img, cv_cropped_img, 0, pad_height,
-          0, pad_width, cv::BORDER_CONSTANT,
-          cv::Scalar(mean_values_[0], mean_values_[1], mean_values_[2]));
+    unsigned int ch0 = 0;
+    for(unsigned int i = 0; i < numImages - 1; ++i) {
+      cv::Scalar mean;
+      for(unsigned int c = 0; c < cv_img_seg[i].channels(); ++c)
+        mean[c] = mean_values_[ch0 + c];
+      ch0 += cv_img_seg[i].channels();
+      cv::copyMakeBorder(cv_cropped_imgs[i], cv_cropped_imgs[i], 0, pad_height,
+            0, pad_width, cv::BORDER_CONSTANT, mean);
+    }
     cv::copyMakeBorder(cv_cropped_seg, cv_cropped_seg, 0, pad_height,
-          0, pad_width, cv::BORDER_CONSTANT,
-                       cv::Scalar(ignore_label));
+          0, pad_width, cv::BORDER_CONSTANT, cv::Scalar(ignore_label));
     // update height/width
-    img_height   = cv_cropped_img.rows;
-    img_width    = cv_cropped_img.cols;
+    img_height   = cv_cropped_imgs[0].rows;
+    img_width    = cv_cropped_imgs[0].cols;
 
     seg_height   = cv_cropped_seg.rows;
     seg_width    = cv_cropped_seg.cols;
@@ -303,7 +317,7 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
     CHECK_EQ(crop_size, data_height);
     CHECK_EQ(crop_size, data_width);
     // We only do random crop when we do training.
-    if (phase_ == Caffe::TRAIN) {
+    if (phase_ == TRAIN) {
       h_off = Rand(img_height - crop_size + 1);
       w_off = Rand(img_width - crop_size + 1);
     } else {
@@ -312,48 +326,56 @@ void DataTransformer<Dtype>::TransformImgs(const std::vector<cv::Mat>& cv_img_se
       w_off = (img_width - crop_size) / 2;
     }
     cv::Rect roi(w_off, h_off, crop_size, crop_size);
-    cv_cropped_img = cv_cropped_img(roi);
+    for(unsigned int i = 0; i < numImages - 1; ++i)
+      cv_cropped_imgs[i] = cv_cropped_imgs[i](roi);
     cv_cropped_seg = cv_cropped_seg(roi);
   }
 
-  CHECK(cv_cropped_img.data);
+  for(unsigned int i = 0; i < numImages - 1; ++i)
+    CHECK(cv_cropped_imgs[i].data);
   CHECK(cv_cropped_seg.data);
 
-  Dtype* transformed_data  = transformed_data_blob->mutable_cpu_data();
-  Dtype* transformed_label = transformed_label_blob->mutable_cpu_data();
+  Dtype* transformed_label = transformed_data_blobs[labelIdx].mutable_cpu_data();
 
   int top_index;
-  const double* data_ptr;
   const uchar* label_ptr;
-
   for (int h = 0; h < data_height; ++h) {
-    data_ptr = cv_cropped_img.ptr<double>(h);
     label_ptr = cv_cropped_seg.ptr<uchar>(h);
 
     int data_index = 0;
     int label_index = 0;
 
     for (int w = 0; w < data_width; ++w) {
+      
       // for image
-      for (int c = 0; c < img_channels; ++c) {
-        if (do_mirror) {
-          top_index = (c * data_height + h) * data_width + (data_width - 1 - w);
-        } else {
-          top_index = (c * data_height + h) * data_width + w;
-        }
-        Dtype pixel = static_cast<Dtype>(data_ptr[data_index++]);
-        if (has_mean_file) {
-          int mean_index = (c * img_height + h_off + h) * img_width + w_off + w;
-          transformed_data[top_index] =
-            (pixel - mean[mean_index]) * scale;
-        } else {
-          if (has_mean_values) {
-            transformed_data[top_index] =
-              (pixel - mean_values_[c]) * scale;
+      unsigned int ch0 = 0;
+      for (int i = 0; i < numImages - 1; ++i) {
+        unsigned int num_ch = cv_cropped_imgs[i].channels();
+        Dtype* transformed_data  = transformed_data_blobs[i].mutable_cpu_data();
+        const double* data_ptr = cv_cropped_imgs[i].ptr<double>(h);
+        
+        for (int c = 0; c < num_ch; ++c) {
+          if (do_mirror) {
+            top_index = (c * data_height + h) * data_width + (data_width - 1 - w);
           } else {
-            transformed_data[top_index] = pixel * scale;
+            top_index = (c * data_height + h) * data_width + w;
+          }
+          Dtype pixel = static_cast<Dtype>(data_ptr[data_index++]);
+          if (has_mean_file) {
+            // TODO test that this works (ch0 + c)
+            int mean_index = ((ch0 + c) * img_height + h_off + h) * img_width + w_off + w;
+            transformed_data[top_index] = (pixel - mean[mean_index]) * scale;
+          } else {
+            if (has_mean_values) {
+              transformed_data[top_index] =
+                (pixel - mean_values_[ch0 + c]) * scale;
+            } else {
+              transformed_data[top_index] = pixel * scale;
+            }
           }
         }
+        ch0 += num_ch;
+        
       }
 
       // for segmentation

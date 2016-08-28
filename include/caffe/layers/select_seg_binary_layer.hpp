@@ -1,7 +1,6 @@
 #ifndef SELECT_SEG_BINARY_LAYER_HPP
 #define SELECT_SEG_BINARY_LAYER_HPP
 
-#include <array>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,13 +37,14 @@ class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
   virtual void InternalThreadEntry();
 
  protected:
-  Blob<Dtype> transformed_data_[NumImages];
+  Blob<Dtype> xformed_data_[NumImages];
   Blob<Dtype> class_label_;
+  Blob<Dtype> prefetch_data_dim_;
 
   shared_ptr<Caffe::RNG> prefetch_rng_;
 
   struct SegItems {
-    std::array<std::string, NumImages> imgfn;
+    std::string imgfn[NumImages];
     int x1, y1, x2, y2;
     vector<int> cls_label;
   };
@@ -52,7 +52,6 @@ class SelectSegBinaryLayer : public BasePrefetchingDataLayer<Dtype> {
   vector<SegItems> lines_;
   int lines_id_;
   int label_dim_;
-  std::array<vector<int>, NumImages> img_dims_;
 };
 
 }  // namespace caffe
