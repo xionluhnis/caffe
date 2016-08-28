@@ -15,6 +15,9 @@
 #include "caffe/util/math_functions.hpp"
 #include "caffe/util/rng.hpp"
 
+// set to zero to only generate single image (plus label) instead of multi-images (plus label)
+#define GEN_MULTI_LAYERS 1
+
 namespace caffe {
 
 template <typename Dtype, int NumImages>
@@ -290,12 +293,14 @@ void SelectSegBinaryLayer<Dtype, NumImages>::load_batch(Batch<Dtype>* batch) {
 
 // generate implementations for all interesting numbers of frames
 GEN_LAYER(1, OneFrame);
-// GEN_LAYER(2, TwoFrames);
-// GEN_LAYER(3, ThreeFrames);
-// GEN_LAYER(4, FourFrames);
-// GEN_LAYER(5, FiveFrames);
-// GEN_LAYER(6, SixFrames);
-// GEN_LAYER(7, SevenFrames);
-// GEN_LAYER(8, EightFrames);
+#if GEN_MULTI_LAYERS
+GEN_LAYER(2, TwoFrames);
+GEN_LAYER(3, ThreeFrames);
+GEN_LAYER(4, FourFrames);
+GEN_LAYER(5, FiveFrames);
+GEN_LAYER(6, SixFrames);
+GEN_LAYER(7, SevenFrames);
+GEN_LAYER(8, EightFrames);
+#endif
 
 }  // namespace caffe
